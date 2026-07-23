@@ -30,17 +30,25 @@ Then point it at your own swarm.
 
 ## Already running a fleet? Assess it directly
 
-If you run **Claude Code / PAI** or **pi**, you don't have to hand-write the description — the adapter reads your install and generates it:
+You don't have to hand-write the description — an adapter reads your install and generates the `swarm.json` for you. Four frameworks:
 
 ```bash
-# Claude Code / PAI (reads your agents/ and their tool grants)
-bun adapt.ts pai ~/.claude   > my-swarm.json && bun swarm-posture.ts my-swarm.json
+# Claude Code / PAI  (reads agents/ and their tool grants)
+bun adapt.ts pai       ~/.claude              > my-swarm.json && bun swarm-posture.ts my-swarm.json
 
-# pi (reads your extensions and tool reach)
-bun adapt.ts pi  ~/.pi/agent > my-swarm.json && bun swarm-posture.ts my-swarm.json
+# pi                  (reads extensions and tool reach)
+bun adapt.ts pi        ~/.pi/agent            > my-swarm.json && bun swarm-posture.ts my-swarm.json
+
+# LangGraph           (parses add_node / add_edge / bind_tools in your Python)
+bun adapt.ts langgraph ./my-langgraph-app     > my-swarm.json && bun swarm-posture.ts my-swarm.json
+
+# CrewAI              (parses config/agents.yaml + Agent()/Crew() in your Python)
+bun adapt.ts crewai    ./my-crewai-project    > my-swarm.json && bun swarm-posture.ts my-swarm.json
 ```
 
-The mapping is: an agent's **tools are its data reach**. `Bash` can read your credentials and env, so any agent with it reaches *secrets*. The `Agent`/`Task` tool is delegation. Most Claude Code subagents inherit **all tools** by default — so most can reach your secrets, whether they need to or not. That's the least-privilege gap the adapter makes visible. Open the generated `my-swarm.json`, set `role_owns` to mark which roles *legitimately* hold each sensitive class, and re-run to separate by-design from over-broad.
+The mapping is the same for all four: an agent's **tools are its data reach**. A shell/code tool (`Bash`, `python_repl`, `shell`) can read your credentials and env, so any agent with it reaches *secrets*. A delegation edge (`Agent`/`Task`, a LangGraph `add_edge`, a CrewAI `allow_delegation=True` or hierarchical manager) is an invoke edge — that's where attack paths hide. Open the generated `my-swarm.json`, set `role_owns` to mark which roles *legitimately* hold each sensitive class, and re-run to separate by-design from over-broad.
+
+**Two things worth knowing about the framework adapters.** PAI and pi read structured config, so their output is exact. **LangGraph and CrewAI are code-defined**, so their adapters parse the *common* patterns — node/edge/`bind_tools` for LangGraph (tools attributed to a node when the `bind_tools` variable name matches the node, e.g. `coder_llm` → `coder`); `agents.yaml` + `Agent(role=, tools=, allow_delegation=)` + `Process.hierarchical` for CrewAI. A dynamically-constructed or unusually-structured graph may parse partially — treat the generated `swarm.json` as a first draft you can correct by hand, not gospel. And tool **reach is inferred from the tool's name** (a tool called `sql_query` → database; `web_search` → egress), so glance at the `reads` it assigned and adjust any it guessed wrong. Working reference apps are in [`examples/`](examples/) — run the adapter against them to see the shape.
 
 ## Describe your swarm
 
