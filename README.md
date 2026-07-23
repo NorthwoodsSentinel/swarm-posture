@@ -28,6 +28,20 @@ ATTACK PATHS (composed escalation — a chain a per-worker review can't see)
 
 Then point it at your own swarm.
 
+## Already running a fleet? Assess it directly
+
+If you run **Claude Code / PAI** or **pi**, you don't have to hand-write the description — the adapter reads your install and generates it:
+
+```bash
+# Claude Code / PAI (reads your agents/ and their tool grants)
+bun adapt.ts pai ~/.claude   > my-swarm.json && bun swarm-posture.ts my-swarm.json
+
+# pi (reads your extensions and tool reach)
+bun adapt.ts pi  ~/.pi/agent > my-swarm.json && bun swarm-posture.ts my-swarm.json
+```
+
+The mapping is: an agent's **tools are its data reach**. `Bash` can read your credentials and env, so any agent with it reaches *secrets*. The `Agent`/`Task` tool is delegation. Most Claude Code subagents inherit **all tools** by default — so most can reach your secrets, whether they need to or not. That's the least-privilege gap the adapter makes visible. Open the generated `my-swarm.json`, set `role_owns` to mark which roles *legitimately* hold each sensitive class, and re-run to separate by-design from over-broad.
+
 ## Describe your swarm
 
 A small JSON file (`example-swarm.json` is the template):

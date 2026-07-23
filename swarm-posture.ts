@@ -59,12 +59,19 @@ for (const w of cfg.workers) {
 }
 
 // ── 2 · ATTACK-PATH ANALYSIS (composed escalation across invoke edges) ──────
-// From each worker, walk invoke edges; report any path whose terminal reaches a
-// sensitive class the ORIGIN does not itself own — the origin can reach it via a deputy.
+// Walk invoke edges from each worker; report a path whose terminal reaches a
+// sensitive class the ORIGIN can't reach directly — i.e. the origin gets there
+// only through a deputy. An attack path to a class the origin ALREADY holds
+// directly is not an escalation (that's just blast radius, reported above), so
+// it is skipped — which also keeps a densely-connected swarm from exploding.
+const MAX_DEPTH = 6; // real escalation chains are short; bounds path enumeration
 interface Path { chain: string[]; reaches: string }
 const paths: Path[] = [];
 const seen = new Set<string>();
-function walk(originRole: string, chain: string[]) {
+const directClasses = (w: Worker) => new Set(sensitiveReach(w).map((r) => r.class));
+const allSensitive = new Set(cfg.workers.flatMap((w) => sensitiveReach(w).map((r) => r.class)));
+function walk(originRole: string, ownDirect: Set<string>, chain: string[]) {
+  if (chain.length > MAX_DEPTH) return;
   const node = byId.get(chain[chain.length - 1]);
   if (!node) return;
   for (const next of node.invokes) {
@@ -73,15 +80,21 @@ function walk(originRole: string, chain: string[]) {
     if (!nw) continue;
     const newChain = [...chain, next];
     for (const r of sensitiveReach(nw)) {
-      if (roleOwns(originRole, r.class)) continue; // origin owns it — not an escalation
+      if (roleOwns(originRole, r.class) || ownDirect.has(r.class)) continue; // origin owns or already reaches it directly
       const key = newChain.join(">") + ":" + r.class;
       if (seen.has(key)) continue; seen.add(key);
       paths.push({ chain: newChain, reaches: `${r.class} (${tier(r.sens)})` });
     }
-    walk(originRole, newChain);
+    walk(originRole, ownDirect, newChain);
   }
 }
-for (const w of cfg.workers) walk(w.role, [w.id]);
+for (const w of cfg.workers) {
+  const own = directClasses(w);
+  // if the origin already reaches every sensitive class directly, no invoke path
+  // can grant it MORE — skip its walk entirely (this short-circuits dense swarms).
+  if ([...allSensitive].every((c) => own.has(c) || roleOwns(w.role, c))) continue;
+  walk(w.role, own, [w.id]);
+}
 
 // ── report ──────────────────────────────────────────────────────────────────
 const B = "\x1b[1m", D = "\x1b[2m", Y = "\x1b[33m", R = "\x1b[31m", G = "\x1b[32m", X = "\x1b[0m";
