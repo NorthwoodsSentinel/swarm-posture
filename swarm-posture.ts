@@ -100,9 +100,31 @@ for (const w of cfg.workers) {
 const B = "\x1b[1m", D = "\x1b[2m", Y = "\x1b[33m", R = "\x1b[31m", G = "\x1b[32m", X = "\x1b[0m";
 console.log(`\n${B}swarm-posture${X} — ${cfg.swarm}  ${D}(${cfg.workers.length} workers · sensitive = ${tier(threshold)} and above)${X}\n`);
 
+// ── POSTURE HEADLINE — the finding at a glance ──────────────────────────────
+const n = cfg.workers.length;
+const withDelegation = cfg.workers.filter((w) => w.invokes.length > 0).length;
+const reachSensitive = cfg.workers.filter((w) => sensitiveReach(w).length > 0);
+// which single sensitive class the most workers reach (the dominant exposure)
+const classCount = new Map<string, number>();
+for (const w of cfg.workers) for (const c of new Set(sensitiveReach(w).map((r) => r.class))) classCount.set(c, (classCount.get(c) ?? 0) + 1);
+const topClass = [...classCount.entries()].sort((a, b) => b[1] - a[1])[0];
+let verdict: string;
+if (excessive.length === 0 && paths.length === 0) verdict = `${G}tight — no worker reaches sensitive data outside its role, no escalation paths.${X}`;
+else if (topClass && topClass[1] === n && withDelegation === n) verdict = `${R}unscoped — all ${n} workers can reach ${topClass[0]} and spawn other agents. This fleet has no per-agent least-privilege.${X}`;
+else verdict = `${Y}${excessive.length} worker(s) over-broad for their role, ${paths.length} escalation path(s). Not least-privilege.${X}`;
+console.log(`${B}POSTURE${X}  ${verdict}`);
+console.log(`${D}  ${n} workers · ${reachSensitive.length} reach sensitive data · ${withDelegation} can spawn other agents · ${topClass ? topClass[1] + " reach " + topClass[0] : "none reach sensitive"}${X}\n`);
+
 console.log(`${B}EXCESSIVE PERMISSIONS${X} ${D}(least-privilege / blast radius)${X}`);
-if (!excessive.length) console.log(`  ${G}none — every worker's sensitive reach is owned by its role.${X}`);
-for (const e of excessive) console.log(`  ${Y}⚠${X} ${B}${e.worker}${X} ${D}(role: ${e.role})${X} reaches ${e.hits.join(", ")} ${D}— its role does not own this; scope down.${X}`);
+// collapse the common case: many workers, same single over-broad class → one line + detail.
+if (excessive.length > 5 && new Set(excessive.flatMap((e) => e.hits)).size <= 2) {
+  const cls = [...new Set(excessive.flatMap((e) => e.hits))].join(", ");
+  console.log(`  ${Y}⚠${X} ${B}${excessive.length} of ${n} workers${X} reach ${cls} — none are tool-scoped. ${D}Set role_owns to mark which roles legitimately need it; scope the rest down.${X}`);
+  console.log(`  ${D}   (${excessive.map((e) => e.worker).join(", ")})${X}`);
+} else {
+  if (!excessive.length) console.log(`  ${G}none — every worker's sensitive reach is owned by its role.${X}`);
+  for (const e of excessive) console.log(`  ${Y}⚠${X} ${B}${e.worker}${X} ${D}(role: ${e.role})${X} reaches ${e.hits.join(", ")} ${D}— its role does not own this; scope down.${X}`);
+}
 
 console.log(`\n${B}ATTACK PATHS${X} ${D}(composed escalation — a chain a per-worker review can't see)${X}`);
 if (!paths.length) console.log(`  ${G}none — no invocation chain reaches sensitive data its origin doesn't own.${X}`);
