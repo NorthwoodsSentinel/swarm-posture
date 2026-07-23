@@ -1,0 +1,13 @@
+{
+  "swarm": "acme-support",
+  "data_tiers": { "0": "public", "1": "internal", "2": "customer-pii", "3": "payment" },
+  "sensitive_at_or_above": 2,
+  "role_owns": {
+    "billing": ["payment", "customer-record"]
+  },
+  "workers": [
+    { "id": "triage-bot",    "role": "triage",  "reads": [ { "class": "ticket",  "max_sensitivity": 1 } ],                                            "invokes": ["billing-agent"] },
+    { "id": "billing-agent", "role": "billing", "reads": [ { "class": "payment", "max_sensitivity": 3 }, { "class": "ticket", "max_sensitivity": 1 } ], "invokes": [] },
+    { "id": "kb-helper",     "role": "general", "reads": [ { "class": "ticket",  "max_sensitivity": 1 }, { "class": "payment", "max_sensitivity": 3 } ], "invokes": [] }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "swarm-posture",
+  "version": "0.1.0",
+  "description": "Attack-path analysis and least-privilege checking for AI agent swarms. Free structural posture check.",
+  "type": "module",
+  "bin": { "swarm-posture": "./swarm-posture.ts" },
+  "scripts": { "start": "bun swarm-posture.ts example-swarm.json" },
+  "license": "Apache-2.0",
+  "author": "NorthWoods Sentinel Labs",
+  "keywords": ["ai-security", "agents", "attack-path", "least-privilege", "aispm", "prompt-injection", "llm-security"]
+}
