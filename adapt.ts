@@ -51,6 +51,72 @@ const TOOL_REACH: Record<string, Reach[]> = {
 const DELEGATION = ["agent", "task"];               // tools that let a worker spawn another
 const ALL_TOOLS = [...Object.keys(TOOL_REACH), ...DELEGATION, "mcp"];
 
+// ── MCP servers: a configured server extends every agent that can reach it ──
+// github-mcp-server is the common big one, and its grants are DECLARED: the
+// toolsets allow-list (GITHUB_TOOLSETS env / --toolsets arg, or the remote URL)
+// decides whether an agent merely reads issues or can touch code, CI, and
+// security findings. Map each toolset to what it reaches. Read-only mode does
+// not shrink DATA reach (Actions logs leak secrets to a reader too) — it only
+// removes write paths, which this structural model doesn't score yet.
+const GITHUB_TOOLSET_REACH: Record<string, Reach[]> = {
+  repos: [{ class: "source-code", max_sensitivity: 3 }],
+  pull_requests: [{ class: "source-code", max_sensitivity: 3 }],
+  gists: [{ class: "source-code", max_sensitivity: 2 }],
+  actions: [{ class: "ci-cd", max_sensitivity: 3 }],
+  code_security: [{ class: "security-findings", max_sensitivity: 3 }],
+  secret_protection: [{ class: "security-findings", max_sensitivity: 3 }],
+  security_advisories: [{ class: "security-findings", max_sensitivity: 3 }],
+  dependabot: [{ class: "security-findings", max_sensitivity: 3 }],
+  issues: [{ class: "github-collab", max_sensitivity: 2 }],
+  discussions: [{ class: "github-collab", max_sensitivity: 2 }],
+  users: [{ class: "github-collab", max_sensitivity: 2 }],
+  orgs: [{ class: "github-collab", max_sensitivity: 2 }],
+  notifications: [{ class: "github-collab", max_sensitivity: 2 }],
+  context: [],                                       // server-side context helpers, no distinct reach
+};
+// per README: the `default` toolset = context, repos, issues, pull_requests, users
+const GITHUB_DEFAULT_TOOLSETS = ["context", "repos", "issues", "pull_requests", "users"];
+
+// find every `mcpServers` object anywhere in a config JSON (Claude Code nests
+// them per-project inside ~/.claude.json as well as at top level).
+function findMcpServers(node: unknown, out: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (k === "mcpServers" && v && typeof v === "object") out.push(v as Record<string, unknown>);
+      else findMcpServers(v, out);
+    }
+  }
+  return out;
+}
+
+// read the install's MCP config and return the reach its servers add.
+function mcpServerReach(root: string): Reach[] {
+  const reads: Reach[] = [];
+  const candidates = [join(root, ".mcp.json"), join(root, "settings.json"), join(root, "..", ".claude.json")];
+  for (const p of candidates) {
+    if (!existsSync(p)) continue;
+    let cfg: unknown; try { cfg = JSON.parse(readFileSync(p, "utf8")); } catch { continue; }
+    for (const servers of findMcpServers(cfg)) {
+      for (const [name, sc] of Object.entries(servers)) {
+        const raw = JSON.stringify(sc).toLowerCase();
+        if (/github-mcp-server|githubcopilot\.com\/mcp/.test(raw) || name.toLowerCase() === "github") {
+          // toolsets from env, args, or remote URL path (…/mcp/x/<toolset>); else the documented default set.
+          const declared = raw.match(/"github_toolsets"\s*:\s*"([a-z_,\s]+)"/)?.[1]
+            ?? raw.match(/--toolsets[",\s]+([a-z_,]+)/)?.[1]
+            ?? raw.match(/githubcopilot\.com\/mcp\/x\/([a-z_]+)/)?.[1];
+          const toolsets = declared === "all" || raw.includes('"all"')
+            ? Object.keys(GITHUB_TOOLSET_REACH)
+            : (declared?.split(",").map((t) => t.trim()) ?? GITHUB_DEFAULT_TOOLSETS);
+          for (const t of toolsets) reads.push(...(GITHUB_TOOLSET_REACH[t] ?? []));
+        } else {
+          reads.push({ class: "external-service", max_sensitivity: 2 }); // unknown server — generic
+        }
+      }
+    }
+  }
+  return reads;
+}
+
 interface Worker { id: string; role: string; reads: Reach[]; invokes: string[] }
 
 function dedupeReads(rs: Reach[]): Reach[] {
@@ -59,13 +125,17 @@ function dedupeReads(rs: Reach[]): Reach[] {
   return [...m].map(([c, s]) => ({ class: c, max_sensitivity: s }));
 }
 // map a set of tool tokens → reads + whether it can delegate
-function toolsToWorker(id: string, role: string, tools: string[], allOtherIds: () => string[]): Worker {
+function toolsToWorker(id: string, role: string, tools: string[], allOtherIds: () => string[], mcpReads: Reach[] = []): Worker {
   const t = tools.map((x) => x.toLowerCase().trim());
   const isAll = t.some((x) => x === "all tools" || x.startsWith("all tools"));
   const has = (name: string) => isAll ? !t.some((x) => x.includes(`except`) && x.includes(name)) : t.some((x) => x === name || x.startsWith(name));
   const reads: Reach[] = [];
   for (const [tool, reach] of Object.entries(TOOL_REACH)) if (has(tool)) reads.push(...reach);
-  if (has("mcp") || t.some((x) => x.startsWith("mcp"))) reads.push({ class: "external-service", max_sensitivity: 2 });
+  if (has("mcp") || t.some((x) => x.startsWith("mcp"))) {
+    // configured servers give specific reach; fall back to generic when none found
+    if (mcpReads.length) reads.push(...mcpReads);
+    else reads.push({ class: "external-service", max_sensitivity: 2 });
+  }
   const canDelegate = DELEGATION.some((d) => has(d));
   return { id, role, reads: dedupeReads(reads), invokes: canDelegate ? allOtherIds().filter((x) => x !== id) : [] };
 }
@@ -76,6 +146,7 @@ function fromPAI(root: string): Worker[] {
   if (!existsSync(agentsDir)) { console.error(`no agents/ dir under ${root}`); process.exit(1); }
   const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
   const names = files.map((f) => f.replace(/\.md$/, ""));
+  const mcpReads = mcpServerReach(root);   // configured MCP servers (e.g. github-mcp-server toolsets)
   const workers: Worker[] = [];
   for (const f of files) {
     const txt = readFileSync(join(agentsDir, f), "utf8");
@@ -83,7 +154,7 @@ function fromPAI(root: string): Worker[] {
     const toolsLine = txt.match(/^tools:\s*(.+)$/m)?.[1]?.trim();
     // No tools: field in a Claude Code subagent = inherits ALL tools.
     const tools = toolsLine ? toolsLine.split(/\s*,\s*/) : ["All tools"];
-    workers.push(toolsToWorker(name, name, tools, () => names));
+    workers.push(toolsToWorker(name, name, tools, () => names, mcpReads));
   }
   return workers;
 }
@@ -114,6 +185,7 @@ function reachForToolName(name: string): Reach[] {
   const n = name.toLowerCase();
   const out: Reach[] = [];
   if (/shell|bash|python|exec|terminal|code_?interpreter|command|subprocess|repl/.test(n)) out.push({ class: "secrets", max_sensitivity: 3 }, { class: "filesystem", max_sensitivity: 2 });
+  if (/github|gitlab|repo|pull_?request|commit|branch/.test(n)) out.push({ class: "source-code", max_sensitivity: 3 });
   if (/secret|credential|vault|api_?key|token|env/.test(n)) out.push({ class: "secrets", max_sensitivity: 3 });
   if (/sql|db|database|postgres|mysql|mongo|query|datastore/.test(n)) out.push({ class: "database", max_sensitivity: 3 });
   if (/file|read|write|fs|directory|path|document|load/.test(n)) out.push({ class: "filesystem", max_sensitivity: 2 });
