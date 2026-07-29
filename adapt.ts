@@ -90,7 +90,10 @@ function findMcpServers(node: unknown, out: Record<string, unknown>[] = []): Rec
 }
 
 // read the install's MCP config and return the reach its servers add.
-function mcpServerReach(root: string): Reach[] {
+// `found` distinguishes "no MCP config at all" from "configured, but zero mapped
+// reach" (a context-only github server legitimately reaches nothing).
+function mcpServerReach(root: string): { found: boolean; reads: Reach[] } {
+  let found = false;
   const reads: Reach[] = [];
   const candidates = [join(root, ".mcp.json"), join(root, "settings.json"), join(root, "..", ".claude.json")];
   for (const p of candidates) {
@@ -98,15 +101,19 @@ function mcpServerReach(root: string): Reach[] {
     let cfg: unknown; try { cfg = JSON.parse(readFileSync(p, "utf8")); } catch { continue; }
     for (const servers of findMcpServers(cfg)) {
       for (const [name, sc] of Object.entries(servers)) {
+        found = true;
         const raw = JSON.stringify(sc).toLowerCase();
         if (/github-mcp-server|githubcopilot\.com\/mcp/.test(raw) || name.toLowerCase() === "github") {
-          // toolsets from env, args, or remote URL path (…/mcp/x/<toolset>); else the documented default set.
+          // toolsets from env, remote X-MCP-Toolsets header, args, or remote URL
+          // path (…/mcp/x/<toolset>); else the documented default set.
           const declared = raw.match(/"github_toolsets"\s*:\s*"([a-z_,\s]+)"/)?.[1]
+            ?? raw.match(/"x-mcp-toolsets"\s*:\s*"([a-z_,\s]+)"/)?.[1]
             ?? raw.match(/--toolsets[",\s]+([a-z_,]+)/)?.[1]
             ?? raw.match(/githubcopilot\.com\/mcp\/x\/([a-z_]+)/)?.[1];
-          const toolsets = declared === "all" || raw.includes('"all"')
-            ? Object.keys(GITHUB_TOOLSET_REACH)
-            : (declared?.split(",").map((t) => t.trim()) ?? GITHUB_DEFAULT_TOOLSETS);
+          let toolsets = declared?.split(",").map((t) => t.trim()) ?? [...GITHUB_DEFAULT_TOOLSETS];
+          if (toolsets.includes("all")) toolsets = Object.keys(GITHUB_TOOLSET_REACH);
+          else if (toolsets.includes("default"))    // "default,actions" = defaults PLUS actions
+            toolsets = [...new Set([...toolsets.filter((t) => t !== "default"), ...GITHUB_DEFAULT_TOOLSETS])];
           for (const t of toolsets) reads.push(...(GITHUB_TOOLSET_REACH[t] ?? []));
         } else {
           reads.push({ class: "external-service", max_sensitivity: 2 }); // unknown server — generic
@@ -114,7 +121,7 @@ function mcpServerReach(root: string): Reach[] {
       }
     }
   }
-  return reads;
+  return { found, reads };
 }
 
 interface Worker { id: string; role: string; reads: Reach[]; invokes: string[] }
@@ -125,15 +132,16 @@ function dedupeReads(rs: Reach[]): Reach[] {
   return [...m].map(([c, s]) => ({ class: c, max_sensitivity: s }));
 }
 // map a set of tool tokens → reads + whether it can delegate
-function toolsToWorker(id: string, role: string, tools: string[], allOtherIds: () => string[], mcpReads: Reach[] = []): Worker {
+function toolsToWorker(id: string, role: string, tools: string[], allOtherIds: () => string[], mcp: { found: boolean; reads: Reach[] } = { found: false, reads: [] }): Worker {
   const t = tools.map((x) => x.toLowerCase().trim());
   const isAll = t.some((x) => x === "all tools" || x.startsWith("all tools"));
   const has = (name: string) => isAll ? !t.some((x) => x.includes(`except`) && x.includes(name)) : t.some((x) => x === name || x.startsWith(name));
   const reads: Reach[] = [];
   for (const [tool, reach] of Object.entries(TOOL_REACH)) if (has(tool)) reads.push(...reach);
   if (has("mcp") || t.some((x) => x.startsWith("mcp"))) {
-    // configured servers give specific reach; fall back to generic when none found
-    if (mcpReads.length) reads.push(...mcpReads);
+    // configured servers give their declared reach (which can legitimately be
+    // nothing, e.g. context-only); generic fallback ONLY when no config exists.
+    if (mcp.found) reads.push(...mcp.reads);
     else reads.push({ class: "external-service", max_sensitivity: 2 });
   }
   const canDelegate = DELEGATION.some((d) => has(d));
@@ -146,7 +154,7 @@ function fromPAI(root: string): Worker[] {
   if (!existsSync(agentsDir)) { console.error(`no agents/ dir under ${root}`); process.exit(1); }
   const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
   const names = files.map((f) => f.replace(/\.md$/, ""));
-  const mcpReads = mcpServerReach(root);   // configured MCP servers (e.g. github-mcp-server toolsets)
+  const mcp = mcpServerReach(root);   // configured MCP servers (e.g. github-mcp-server toolsets)
   const workers: Worker[] = [];
   for (const f of files) {
     const txt = readFileSync(join(agentsDir, f), "utf8");
@@ -154,7 +162,7 @@ function fromPAI(root: string): Worker[] {
     const toolsLine = txt.match(/^tools:\s*(.+)$/m)?.[1]?.trim();
     // No tools: field in a Claude Code subagent = inherits ALL tools.
     const tools = toolsLine ? toolsLine.split(/\s*,\s*/) : ["All tools"];
-    workers.push(toolsToWorker(name, name, tools, () => names, mcpReads));
+    workers.push(toolsToWorker(name, name, tools, () => names, mcp));
   }
   return workers;
 }
