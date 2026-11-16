@@ -3,9 +3,38 @@
   "version": "0.1.0",
   "description": "Attack-path analysis and least-privilege checking for AI agent swarms. Free structural posture check.",
   "type": "module",
-  "bin": { "swarm-posture": "./swarm-posture.ts" },
-  "scripts": { "start": "bun swarm-posture.ts example-swarm.json" },
+  "bin": {
+    "swarm-posture": "./swarm-posture.ts"
+  },
+  "scripts": {
+    "start": "bun swarm-posture.ts example-swarm.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --coverage && tsx scripts/verify-gate-scope.ts",
+    "local:gate": "npm run format:check && npm run lint && npm run typecheck && npm test"
+  },
   "license": "Apache-2.0",
   "author": "NorthWoods Sentinel Labs",
-  "keywords": ["ai-security", "agents", "attack-path", "least-privilege", "aispm", "prompt-injection", "llm-security"]
+  "keywords": [
+    "ai-security",
+    "agents",
+    "attack-path",
+    "least-privilege",
+    "aispm",
+    "prompt-injection",
+    "llm-security"
+  ],
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "@vitest/coverage-v8": "^5.1.0",
+    "eslint": "^10.15.0",
+    "prettier": "^3.10.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
+  }
 }

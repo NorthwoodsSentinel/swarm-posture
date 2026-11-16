@@ -1,0 +1,61 @@
+{
+  "swarm": "crewai-install",
+  "_generated_by": "adapt.ts crewai examples/crewai-project",
+  "_note": "Tool→reach mapping is a starting heuristic. Set role_owns to mark which roles LEGITIMATELY hold each sensitive class, and refine reads if your agents are tool-restricted.",
+  "data_tiers": {
+    "0": "public",
+    "1": "network-egress",
+    "2": "filesystem",
+    "3": "secrets",
+    "4": "substrate/memory"
+  },
+  "sensitive_at_or_above": 3,
+  "role_owns": {},
+  "workers": [
+    {
+      "id": "researcher",
+      "role": "researcher",
+      "reads": [
+        {
+          "class": "network-egress",
+          "max_sensitivity": 1
+        },
+        {
+          "class": "filesystem",
+          "max_sensitivity": 2
+        }
+      ],
+      "invokes": []
+    },
+    {
+      "id": "engineer",
+      "role": "engineer",
+      "reads": [
+        {
+          "class": "secrets",
+          "max_sensitivity": 3
+        },
+        {
+          "class": "filesystem",
+          "max_sensitivity": 2
+        },
+        {
+          "class": "database",
+          "max_sensitivity": 3
+        }
+      ],
+      "invokes": [
+        "researcher"
+      ]
+    },
+    {
+      "id": "crew_manager",
+      "role": "manager",
+      "reads": [],
+      "invokes": [
+        "researcher",
+        "engineer"
+      ]
+    }
+  ]
+}
