@@ -1,2 +1,6 @@
 node_modules/
 *.log
+
+# Coverage output and per-agent scratch files
+coverage/
+.scratch/

@@ -1,0 +1,20 @@
+
+[1mswarm-posture[0m — acme-support  [2m(3 workers · sensitive = customer-pii and above)[0m
+
+[1mPOSTURE[0m  [33m1 worker(s) over-broad for their role, 1 escalation path(s). Not least-privilege.[0m
+[2m  3 workers · 2 reach sensitive data · 1 can spawn other agents · 2 reach payment[0m
+
+[1mEXCESSIVE PERMISSIONS[0m [2m(least-privilege / blast radius)[0m
+  [33m⚠[0m [1mkb-helper[0m [2m(role: general)[0m reaches payment (customer-pii), payment (payment) [2m— its role does not own this; scope down.[0m
+
+[1mATTACK PATHS[0m [2m(composed escalation — a chain a per-worker review can't see)[0m
+  [31m⚠[0m triage-bot → billing-agent [2mreaches[0m payment (customer-pii) [2m— an injected triage-bot needs no such access itself; it invokes a deputy that has it.[0m
+
+[1m━━ SUMMARY ━━[0m
+  [31m2[0m structural finding(s): 1 excessive-permission, 1 attack-path
+
+[2mThis is the STRUCTURAL check (free). It reads your declared config; it does not run your agents.
+Behavioral simulation — running your workers under live prompt injection to measure whether they
+ACTUALLY breach their intended objective (intent fidelity), and how often — is the paid tier.
+→ NorthWoods Sentinel Labs[0m
+
